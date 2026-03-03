@@ -165,6 +165,7 @@ class SurfaceDataModule(l.LightningDataModule):
 
         df = df.filter(
             (pl.col("T") > 0)
+            & (pl.col("T") < 1000)
             & (pl.col("S") > 0)
             & (pl.col("K") > 0)
             & (pl.col("Impl_Vol") > 0)
@@ -201,10 +202,10 @@ class SurfaceDataModule(l.LightningDataModule):
             pl.col("v").quantile(vq1).alias("v_hi"),
         ).to_dicts()[0]
 
-        u_min = float(stats["u_lo"]) - 0.25
-        u_max = float(stats["u_hi"]) + 0.25
-        v_min = float(stats["v_lo"]) - 0.10
-        v_max = float(stats["v_hi"]) + 0.10
+        u_min = 0.01#float(stats["u_lo"]) - 0.25
+        u_max = 2.0#float(stats["u_hi"]) + 0.25
+        v_min = 0.001#float(stats["v_lo"]) - 0.10
+        v_max = 1000.0#float(stats["v_hi"]) + 0.10
 
         assert self.Nu % self.patch == 0 and self.Nv % self.patch == 0, "Nu/Nv must be divisible by patch"
 
