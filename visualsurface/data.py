@@ -252,6 +252,7 @@ class SurfaceDataModule(l.LightningDataModule):
         dates = df.select(pl.col("date").unique().sort()).to_series().to_list()
         n = len(dates)
         n_train = max(1, int(self.train_ratio * n))
+        print(f"N_Dates: {n} | N_Dates_Train: {n_train}")
         train_dates = set(dates[:n_train])
         val_dates = set(dates[n_train:]) if n_train < n else set(dates[-1:])
 
