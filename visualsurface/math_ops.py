@@ -172,7 +172,7 @@ def rasterize_quotes(
     mask = valid
     flat_idx = (batch_ids[mask] * HW + (iv[mask] * Nu + iu[mask])).long()
 
-    C = 6
+    C = 5
     out = torch.zeros(B, C, HW, device=device)
     counts = torch.zeros(B, HW, device=device)
 
@@ -194,11 +194,8 @@ def rasterize_quotes(
     gamma = feat[..., feat_ix["gamma"]]
     out[:, 4, :].reshape(-1).scatter_add_(0, flat_idx, gamma[mask])
 
-    theta = feat[..., feat_ix["theta"]]
-    out[:, 5, :].reshape(-1).scatter_add_(0, flat_idx, theta[mask])
-
     denom = torch.clamp(counts, min=1.0).unsqueeze(1)
-    for ch in [0, 2, 3, 4, 5]:
+    for ch in [0, 2, 3, 4]:
         out[:, ch, :] = out[:, ch, :] / denom[:, 0, :]
 
     out[:, 1, :] = (counts > 0).float()

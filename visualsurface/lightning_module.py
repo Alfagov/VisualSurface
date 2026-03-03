@@ -29,7 +29,9 @@ class LitSurfaceModel(l.LightningModule):
         w_fit: float = 1.0,
         w_smooth: float = 0.1,
         w_arb: float = 0.1,
-        d_model: int = 256,
+        hidden_size: int = 256,
+        mlp_size: int | None = None,
+        d_model: int | None = None,
         patch: int = 4,
         vit_layers: int = 4,
         vit_heads: int = 8,
@@ -38,17 +40,27 @@ class LitSurfaceModel(l.LightningModule):
         dropout: float = 0.0,
     ):
         super().__init__()
+        if d_model is not None and hidden_size != 256 and hidden_size != d_model:
+            raise ValueError("Provide either hidden_size or d_model, or set both to the same value.")
+        if d_model is not None:
+            hidden_size = d_model
+        if mlp_size is None:
+            mlp_size = 4 * hidden_size
+        if hidden_size <= 0 or mlp_size <= 0:
+            raise ValueError("hidden_size and mlp_size must be positive.")
+
         self.save_hyperparameters(ignore=["spec"])
         self.spec = spec
 
         self.model = SurfaceReconstructor(
             spec=spec,
-            d_model=d_model,
-            img_in_ch=6,
+            hidden_size=hidden_size,
+            mlp_size=mlp_size,
+            img_in_ch=5,
             patch=patch,
             vit_layers=vit_layers,
             vit_heads=vit_heads,
-            quote_num_dim=10,
+            quote_num_dim=9,
             global_dim=4,
             dec_layers=dec_layers,
             dec_heads=dec_heads,

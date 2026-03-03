@@ -49,10 +49,10 @@ class SurfaceBatch:
     def validate(self, spec: RasterSpec) -> None:
         b = self.img.shape[0]
         if self.img.ndim != 4:
-            raise ValueError(f"img must be [B,6,Nv,Nu], got shape={tuple(self.img.shape)}")
-        if self.img.shape[1] != 6 or self.img.shape[2] != spec.Nv or self.img.shape[3] != spec.Nu:
+            raise ValueError(f"img must be [B,5,Nv,Nu], got shape={tuple(self.img.shape)}")
+        if self.img.shape[1] != 5 or self.img.shape[2] != spec.Nv or self.img.shape[3] != spec.Nu:
             raise ValueError(
-                f"img must be [B,6,{spec.Nv},{spec.Nu}], got shape={tuple(self.img.shape)}"
+                f"img must be [B,5,{spec.Nv},{spec.Nu}], got shape={tuple(self.img.shape)}"
             )
 
         if self.quote_u.ndim != 2:
@@ -74,8 +74,8 @@ class SurfaceBatch:
             if tensor.ndim != 2 or tensor.shape[0] != b or tensor.shape[1] != n:
                 raise ValueError(f"{name} must be [B,N], got shape={tuple(tensor.shape)}")
 
-        if self.quote_num.ndim != 3 or self.quote_num.shape[0] != b or self.quote_num.shape[1] != n or self.quote_num.shape[2] != 10:
-            raise ValueError(f"quote_num must be [B,N,10], got shape={tuple(self.quote_num.shape)}")
+        if self.quote_num.ndim != 3 or self.quote_num.shape[0] != b or self.quote_num.shape[1] != n or self.quote_num.shape[2] != 9:
+            raise ValueError(f"quote_num must be [B,N,9], got shape={tuple(self.quote_num.shape)}")
 
         if self.global_feats.ndim != 2 or self.global_feats.shape[0] != b or self.global_feats.shape[1] != 4:
             raise ValueError(f"global_feats must be [B,4], got shape={tuple(self.global_feats.shape)}")

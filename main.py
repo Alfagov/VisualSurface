@@ -102,6 +102,7 @@ def main() -> None:
 
     lrmon = LearningRateMonitor(logging_interval="epoch")
     trainer = l.Trainer(
+        accelerator="cpu",
         max_epochs=10,
         callbacks=[lrmon],
         gradient_clip_val=1.0,

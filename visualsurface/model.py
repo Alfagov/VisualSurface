@@ -14,7 +14,8 @@ class PatchViEncoder(nn.Module):
     def __init__(
         self,
         in_ch: int,
-        d_model: int,
+        hidden_size: int,
+        mlp_size: int,
         patch: int,
         n_layers: int,
         n_heads: int,
@@ -22,25 +23,25 @@ class PatchViEncoder(nn.Module):
         dropout: float = 0.0,
     ):
         super().__init__()
-        self.patch_embed = nn.Conv2d(in_ch, d_model, kernel_size=patch, stride=patch, bias=True)
+        self.patch_embed = nn.Conv2d(in_ch, hidden_size, kernel_size=patch, stride=patch, bias=True)
 
         Nv, Nu = grid_hw
         assert Nv % patch == 0 and Nu % patch == 0, "Nv/Nu must be divisible by patch"
         self.n_patches = (Nv // patch) * (Nu // patch)
-        self.pos = nn.Parameter(torch.zeros(1, self.n_patches, d_model))
+        self.pos = nn.Parameter(torch.zeros(1, self.n_patches, hidden_size))
         nn.init.trunc_normal_(self.pos, std=0.02)
 
         enc_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
+            d_model=hidden_size,
             nhead=n_heads,
-            dim_feedforward=4 * d_model,
+            dim_feedforward=mlp_size,
             dropout=dropout,
             activation="gelu",
             batch_first=True,
             norm_first=True,
         )
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
-        self.norm = nn.LayerNorm(d_model)
+        self.norm = nn.LayerNorm(hidden_size)
 
     def forward(self, img: torch.Tensor) -> torch.Tensor:
         x = self.patch_embed(img)
@@ -54,44 +55,67 @@ class SurfaceReconstructor(nn.Module):
     def __init__(
         self,
         spec: RasterSpec,
-        d_model: int = 256,
-        img_in_ch: int = 6,
+        hidden_size: int = 256,
+        mlp_size: int | None = None,
+        d_model: int | None = None,
+        img_in_ch: int = 5,
         patch: int = 4,
         vit_layers: int = 4,
         vit_heads: int = 8,
-        quote_num_dim: int = 10,
+        quote_num_dim: int = 9,
         global_dim: int = 4,
         dec_layers: int = 4,
         dec_heads: int = 8,
         dropout: float = 0.0,
     ):
         super().__init__()
-        self.spec = spec
-        self.img_enc = PatchViEncoder(img_in_ch, d_model, patch, vit_layers, vit_heads, (spec.Nv, spec.Nu), dropout)
+        if d_model is not None and hidden_size != 256 and hidden_size != d_model:
+            raise ValueError("Provide either hidden_size or d_model, or set both to the same value.")
+        if d_model is not None:
+            hidden_size = d_model
+        if mlp_size is None:
+            mlp_size = 4 * hidden_size
+        if hidden_size <= 0 or mlp_size <= 0:
+            raise ValueError("hidden_size and mlp_size must be positive.")
 
-        self.cp_emb = nn.Embedding(2, d_model)
-        self.style_emb = nn.Embedding(2, d_model)
+        self.spec = spec
+        self.img_enc = PatchViEncoder(
+            img_in_ch,
+            hidden_size,
+            mlp_size,
+            patch,
+            vit_layers,
+            vit_heads,
+            (spec.Nv, spec.Nu),
+            dropout,
+        )
+
+        self.cp_emb = nn.Embedding(2, hidden_size)
+        self.style_emb = nn.Embedding(2, hidden_size)
 
         self.quote_num_mlp = nn.Sequential(
-            nn.Linear(2 + quote_num_dim, d_model),
+            nn.Linear(2 + quote_num_dim, mlp_size),
             nn.GELU(),
-            nn.LayerNorm(d_model),
+            nn.Linear(mlp_size, hidden_size),
+            nn.LayerNorm(hidden_size),
         )
         self.global_mlp = nn.Sequential(
-            nn.Linear(global_dim, d_model),
+            nn.Linear(global_dim, mlp_size),
             nn.GELU(),
-            nn.LayerNorm(d_model),
+            nn.Linear(mlp_size, hidden_size),
+            nn.LayerNorm(hidden_size),
         )
         self.query_mlp = nn.Sequential(
-            nn.Linear(2, d_model),
+            nn.Linear(2, mlp_size),
             nn.GELU(),
-            nn.LayerNorm(d_model),
+            nn.Linear(mlp_size, hidden_size),
+            nn.LayerNorm(hidden_size),
         )
 
         dec_layer = nn.TransformerDecoderLayer(
-            d_model=d_model,
+            d_model=hidden_size,
             nhead=dec_heads,
-            dim_feedforward=4 * d_model,
+            dim_feedforward=mlp_size,
             dropout=dropout,
             activation="gelu",
             batch_first=True,
@@ -100,9 +124,9 @@ class SurfaceReconstructor(nn.Module):
         self.decoder = nn.TransformerDecoder(dec_layer, num_layers=dec_layers)
 
         self.head = nn.Sequential(
-            nn.Linear(d_model, d_model),
+            nn.Linear(hidden_size, mlp_size),
             nn.GELU(),
-            nn.Linear(d_model, 1),
+            nn.Linear(mlp_size, 1),
         )
 
     def forward(

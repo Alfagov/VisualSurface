@@ -21,7 +21,6 @@ def make_quote_numeric_features(
     ask: torch.Tensor,
     delta: torch.Tensor,
     gamma: torch.Tensor,
-    theta: torch.Tensor,
     r: torch.Tensor,
     q: torch.Tensor,
     vix: torch.Tensor,
@@ -32,7 +31,6 @@ def make_quote_numeric_features(
     spot = torch.clamp(S, min=eps)
 
     gamma_scaled = gamma * (spot ** 2)
-    theta_scaled = theta * torch.clamp(T_years, min=1e-6)
     logK_over_S = torch.log(torch.clamp(K, min=eps) / spot)
 
     return torch.stack(
@@ -42,7 +40,6 @@ def make_quote_numeric_features(
             price / spot,
             delta,
             gamma_scaled,
-            theta_scaled,
             r,
             q,
             logK_over_S,
@@ -106,7 +103,6 @@ class SurfaceDataModule(l.LightningDataModule):
             "Ask": 2,
             "delta": 3,
             "gamma": 4,
-            "theta": 5,
         }
 
     def _read_df(self) -> pl.DataFrame:
@@ -120,7 +116,6 @@ class SurfaceDataModule(l.LightningDataModule):
         expr_mid = 0.5 * (pl.col("Bid") + pl.col("Ask"))
         expr_spread = (pl.col("Ask") - pl.col("Bid")).clip(lower_bound=0.0)
         expr_gamma_scaled = pl.col("gamma") * (expr_spot ** 2)
-        expr_theta_scaled = pl.col("theta") * pl.col("T_years").clip(lower_bound=1e-6)
         expr_logK_over_S = (pl.col("K") / expr_spot).log()
 
         feat_exprs = [
@@ -129,19 +124,18 @@ class SurfaceDataModule(l.LightningDataModule):
             (pl.col("Price") / expr_spot).alias("f2"),
             pl.col("delta").alias("f3"),
             expr_gamma_scaled.alias("f4"),
-            expr_theta_scaled.alias("f5"),
-            pl.col("rate").alias("f6"),
-            pl.col("dividend_yield").alias("f7"),
-            expr_logK_over_S.alias("f8"),
-            pl.col("vix").alias("f9"),
+            pl.col("rate").alias("f5"),
+            pl.col("dividend_yield").alias("f6"),
+            expr_logK_over_S.alias("f7"),
+            pl.col("vix").alias("f8"),
         ]
 
         tmp = df_train.select(feat_exprs)
-        means = tmp.select([pl.col(f"f{i}").mean().alias(f"m{i}") for i in range(10)]).to_dicts()[0]
-        stds = tmp.select([pl.col(f"f{i}").std().fill_null(1.0).alias(f"s{i}") for i in range(10)]).to_dicts()[0]
+        means = tmp.select([pl.col(f"f{i}").mean().alias(f"m{i}") for i in range(9)]).to_dicts()[0]
+        stds = tmp.select([pl.col(f"f{i}").std().fill_null(1.0).alias(f"s{i}") for i in range(9)]).to_dicts()[0]
 
-        mean = torch.tensor([float(means[f"m{i}"]) for i in range(10)], dtype=torch.float32)
-        std = torch.tensor([float(stds[f"s{i}"]) for i in range(10)], dtype=torch.float32)
+        mean = torch.tensor([float(means[f"m{i}"]) for i in range(9)], dtype=torch.float32)
+        std = torch.tensor([float(stds[f"s{i}"]) for i in range(9)], dtype=torch.float32)
         std = torch.clamp(std, min=1e-6)
         return mean, std
 
@@ -160,7 +154,6 @@ class SurfaceDataModule(l.LightningDataModule):
             pl.col("rate").cast(pl.Float64),
             pl.col("delta").cast(pl.Float64),
             pl.col("gamma").cast(pl.Float64),
-            pl.col("theta").cast(pl.Float64),
         )
 
         df = df.filter(
@@ -238,7 +231,6 @@ class SurfaceDataModule(l.LightningDataModule):
                 pl.col("dividend_yield").alias("q_list"),
                 pl.col("delta").alias("delta_list"),
                 pl.col("gamma").alias("gamma_list"),
-                pl.col("theta").alias("theta_list"),
                 pl.col("cp_i").alias("cp_list"),
                 pl.col("style_i").alias("style_list"),
             )
@@ -298,7 +290,6 @@ class SurfaceDataModule(l.LightningDataModule):
         q_q = torch.stack([pad_1d(r["q_list"]) for r in batch_rows], dim=0)
         delta = torch.stack([pad_1d(r["delta_list"]) for r in batch_rows], dim=0)
         gamma = torch.stack([pad_1d(r["gamma_list"]) for r in batch_rows], dim=0)
-        theta = torch.stack([pad_1d(r["theta_list"]) for r in batch_rows], dim=0)
         cp = torch.stack([pad_1d_long(r["cp_list"]) for r in batch_rows], dim=0)
         style = torch.stack([pad_1d_long(r["style_list"]) for r in batch_rows], dim=0)
 
@@ -325,7 +316,6 @@ class SurfaceDataModule(l.LightningDataModule):
             ask=ask,
             delta=delta,
             gamma=gamma,
-            theta=theta,
             r=r_q,
             q=q_q,
             vix=vix_bn,
@@ -335,7 +325,7 @@ class SurfaceDataModule(l.LightningDataModule):
         std = self.quote_num_std.view(1, 1, -1)
         quote_num = (quote_num - mean) / std
 
-        feat = torch.stack([quote_iv, bid, ask, delta, gamma, theta], dim=-1)
+        feat = torch.stack([quote_iv, bid, ask, delta, gamma], dim=-1)
         img = rasterize_quotes(quote_u, quote_v, feat, quote_valid, self.spec, self.feat_ix)
 
         batch = SurfaceBatch(
