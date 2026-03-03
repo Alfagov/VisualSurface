@@ -128,7 +128,7 @@ class LitSurfaceModel(l.LightningModule):
         losses = self._compute_losses(iv_grid, batch)
 
         self.log("train/total", losses["total"], prog_bar=True)
-        self.log("train/fit", losses["fit"], prog_bar=False)
-        self.log("train/smooth", losses["smooth"], prog_bar=False)
-        self.log("train/arb", losses["arb"], prog_bar=False)
+        self.log("train/fit", losses["fit"], prog_bar=True)
+        self.log("train/smooth", losses["smooth"], prog_bar=True)
+        self.log("train/arb", losses["arb"], prog_bar=True)
         return losses["total"]
