@@ -162,7 +162,7 @@ class SurfaceDataModule(l.LightningDataModule):
             & (pl.col("S") > 0)
             & (pl.col("K") > 0)
             & (pl.col("Impl_Vol") > 0)
-            & (pl.col("Impl_Vol") <= 1)
+            & (pl.col("Impl_Vol") <= 0.80)
             & (pl.col("Ask") >= pl.col("Bid"))
         )
 
