@@ -197,7 +197,7 @@ class LitSurfaceModel(l.LightningModule):
                 # WandB: expects [H, W, 3] uint8 numpy array
                 import wandb
                 arr = tensor.permute(1, 2, 0).mul(255).byte().numpy()
-                exp.log({tag: wandb.Image(arr)}, step=step)
+                exp.log({tag: wandb.Image(arr)})
 
         try:
             tensor = plot_rasterized_input(batch.img[b], self.spec)
