@@ -140,33 +140,31 @@ def plot_residuals(
 
 
 def extract_encoder_attention(img: torch.Tensor, img_enc: nn.Module) -> torch.Tensor:
-    """Run img through img_enc, capturing attention from the last encoder layer.
+    """Extract attention weights from the last ViT encoder layer.
 
-    Monkey-patches last_layer.self_attn.forward to force need_weights=True,
-    average_attn_weights=False, then restores the original in a finally block.
+    Bypasses TransformerEncoder's C++ fast path by manually stepping through
+    the layers and calling self_attn directly on the last one.
 
     img: [B, 5, Nv, Nu]
     Returns: [B, n_heads, Np, Np]
     """
-    last_layer = img_enc.enc.layers[-1]
-    orig_forward = last_layer.self_attn.forward
-    captured: list[torch.Tensor] = []
+    with torch.no_grad():
+        x = img_enc.patch_embed(img)
+        x = x.flatten(2).transpose(1, 2)
+        x = x + img_enc.pos
 
-    def _patched(query, key, value, **kwargs):
-        kwargs["need_weights"] = True
-        kwargs["average_attn_weights"] = False
-        out, weights = orig_forward(query, key, value, **kwargs)
-        captured.append(weights.detach().cpu())
-        return out, weights
+        for layer in img_enc.enc.layers[:-1]:
+            x = layer(x)
 
-    try:
-        last_layer.self_attn.forward = _patched
-        with torch.no_grad():
-            img_enc(img)
-    finally:
-        last_layer.self_attn.forward = orig_forward
+        last = img_enc.enc.layers[-1]
+        # norm_first=True: attention is applied to norm1(x)
+        _, attn_weights = last.self_attn(
+            last.norm1(x), last.norm1(x), last.norm1(x),
+            need_weights=True,
+            average_attn_weights=False,
+        )
 
-    return captured[0]  # [B, n_heads, Np, Np]
+    return attn_weights.detach().cpu()  # [B, n_heads, Np, Np]
 
 
 def plot_encoder_attention(
