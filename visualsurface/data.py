@@ -158,11 +158,11 @@ class SurfaceDataModule(l.LightningDataModule):
 
         df = df.filter(
             (pl.col("T") > 0)
-            & (pl.col("T") < 1000)
+            & (pl.col("T") < 365)
             & (pl.col("S") > 0)
             & (pl.col("K") > 0)
             & (pl.col("Impl_Vol") > 0)
-            & (pl.col("Impl_Vol") <= 0.80)
+            & (pl.col("Impl_Vol") <= 0.85)
             & (pl.col("Ask") >= pl.col("Bid"))
         )
 
