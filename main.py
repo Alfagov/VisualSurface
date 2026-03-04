@@ -3,7 +3,7 @@ from pathlib import Path
 import lightning as l
 import matplotlib.pyplot as plt
 import torch
-from lightning.pytorch.callbacks import LearningRateMonitor
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 
 from visualsurface import LitSurfaceModel, SurfaceDataModule
 from visualsurface.math_ops import make_uv_grid, v_to_t_years
@@ -98,13 +98,25 @@ def main() -> None:
     lit = LitSurfaceModel(
         spec=dm.spec,
         lr=2e-4,
+        w_arb=1,
+        w_smooth=1,
+        vit_layers=12,
+        vit_heads=12,
+        d_model=768,
+        mlp_size=3072
     )
 
     lrmon = LearningRateMonitor(logging_interval="epoch")
+    ckpt = ModelCheckpoint(
+        dirpath="checkpoints",
+        filename="surface-{epoch:03d}",
+        every_n_epochs=1,
+        save_top_k=-1,
+        save_last=True,
+    )
     trainer = l.Trainer(
-        accelerator="cpu",
-        max_epochs=10,
-        callbacks=[lrmon],
+        max_epochs=150,
+        callbacks=[lrmon, ckpt],
         gradient_clip_val=1.0,
         enable_progress_bar=True,
     )
