@@ -108,7 +108,7 @@ class SurfaceDataModule(l.LightningDataModule):
     def _read_df(self) -> pl.DataFrame:
         if self.data_path.endswith(".parquet"):
             return pl.read_parquet(self.data_path)
-        return pl.read_csv(self.data_path)
+        return pl.scan_csv(self.data_path).collect()
 
     def _compute_quote_num_stats(self, df_train: pl.DataFrame) -> Tuple[torch.Tensor, torch.Tensor]:
         eps = 1e-12
@@ -195,7 +195,7 @@ class SurfaceDataModule(l.LightningDataModule):
             pl.col("v").quantile(vq1).alias("v_hi"),
         ).to_dicts()[0]
 
-        u_min = float(stats["u_lo"]) - 0.3
+        u_min = min(float(stats["u_lo"]) - 0.3, 0.0)
         u_max = float(stats["u_hi"]) + 0.3
         v_min = float(stats["v_lo"]) - 0.20
         v_max = float(stats["v_hi"]) + 0.20

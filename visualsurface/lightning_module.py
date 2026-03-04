@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Dict
 
 import lightning as l
@@ -38,6 +39,7 @@ class LitSurfaceModel(l.LightningModule):
         dec_layers: int = 4,
         dec_heads: int = 8,
         dropout: float = 0.0,
+        vis_every_n_epochs: int = 1,
     ):
         super().__init__()
         if d_model is not None and hidden_size != 256 and hidden_size != d_model:
@@ -90,7 +92,7 @@ class LitSurfaceModel(l.LightningModule):
         fit = ((pred_at_quotes - quote_iv)[quote_valid] ** 2).mean()
 
         _, v_vec = make_uv_grid(spec, device=device)
-        T_vec = torch.clamp(v_to_t_years(v_vec), min=1e-6)
+        T_vec = torch.clamp(v_to_t_years(v_vec), min=1/365)
         smooth = smoothness_loss_total_variance(iv_grid, T_vec, p=2)
 
         T_u_days, r_u, q_u, M_valid = build_term_structure_by_t_days(T_days, r_q, q_q, quote_valid)
@@ -144,3 +146,85 @@ class LitSurfaceModel(l.LightningModule):
         self.log("train/smooth", losses["smooth"], prog_bar=True)
         self.log("train/arb", losses["arb"], prog_bar=True)
         return losses["total"]
+
+    def validation_step(self, batch: SurfaceBatch, batch_idx: int):
+        batch = batch.to(self.device)
+
+        iv_grid = self.model(
+            batch.img,
+            batch.quote_u,
+            batch.quote_v,
+            batch.quote_num,
+            batch.cp,
+            batch.style,
+            batch.quote_valid,
+            batch.global_feats,
+        )
+        losses = self._compute_losses(iv_grid, batch)
+
+        self.log("val/total", losses["total"], prog_bar=True)
+        self.log("val/fit", losses["fit"])
+        self.log("val/smooth", losses["smooth"])
+        self.log("val/arb", losses["arb"])
+
+        should_vis = (
+            batch_idx == 0
+            and (self.current_epoch + 1) % self.hparams.vis_every_n_epochs == 0
+            and self.logger is not None
+            and hasattr(self.logger, "experiment")
+            and hasattr(self.logger.experiment, "add_image")
+        )
+        if should_vis:
+            self._log_visualizations(batch, iv_grid)
+
+    def _log_visualizations(self, batch: SurfaceBatch, iv_grid: torch.Tensor) -> None:
+        from visualsurface.viz import (
+            extract_encoder_attention,
+            plot_encoder_attention,
+            plot_iv_surface,
+            plot_residuals,
+            plot_rasterized_input,
+        )
+
+        b = 0
+        step = self.global_step
+        exp = self.logger.experiment
+
+        try:
+            tensor = plot_rasterized_input(batch.img[b], self.spec)
+            exp.add_image("vis/rasterized_input", tensor, step)
+        except Exception as e:
+            warnings.warn(f"vis/rasterized_input failed: {e}")
+
+        try:
+            tensor = plot_iv_surface(
+                iv_grid[b].detach(),
+                self.spec,
+                batch.quote_u[b],
+                batch.quote_v[b],
+                batch.quote_iv[b],
+                batch.quote_valid[b],
+            )
+            exp.add_image("vis/iv_surface", tensor, step)
+        except Exception as e:
+            warnings.warn(f"vis/iv_surface failed: {e}")
+
+        try:
+            tensor = plot_residuals(
+                iv_grid[b].detach(),
+                batch.quote_u[b],
+                batch.quote_v[b],
+                batch.quote_iv[b],
+                batch.quote_valid[b],
+                self.spec,
+            )
+            exp.add_image("vis/residuals", tensor, step)
+        except Exception as e:
+            warnings.warn(f"vis/residuals failed: {e}")
+
+        try:
+            attn = extract_encoder_attention(batch.img[[b]], self.model.img_enc)
+            tensor = plot_encoder_attention(attn[0], self.spec, self.hparams.patch)
+            exp.add_image("vis/encoder_attention", tensor, step)
+        except Exception as e:
+            warnings.warn(f"vis/encoder_attention failed: {e}")
