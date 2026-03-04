@@ -172,7 +172,6 @@ class LitSurfaceModel(l.LightningModule):
             and (self.current_epoch + 1) % self.hparams.vis_every_n_epochs == 0
             and self.logger is not None
             and hasattr(self.logger, "experiment")
-            and hasattr(self.logger.experiment, "add_image")
         )
         if should_vis:
             self._log_visualizations(batch, iv_grid)
@@ -190,9 +189,19 @@ class LitSurfaceModel(l.LightningModule):
         step = self.global_step
         exp = self.logger.experiment
 
+        def _log_image(tag: str, tensor: torch.Tensor) -> None:
+            if hasattr(exp, "add_image"):
+                # TensorBoard: expects [3, H, W] float in [0, 1]
+                exp.add_image(tag, tensor, step)
+            else:
+                # WandB: expects [H, W, 3] uint8 numpy array
+                import wandb
+                arr = tensor.permute(1, 2, 0).mul(255).byte().numpy()
+                exp.log({tag: wandb.Image(arr)}, step=step)
+
         try:
             tensor = plot_rasterized_input(batch.img[b], self.spec)
-            exp.add_image("vis/rasterized_input", tensor, step)
+            _log_image("vis/rasterized_input", tensor)
         except Exception as e:
             warnings.warn(f"vis/rasterized_input failed: {e}")
 
@@ -205,7 +214,7 @@ class LitSurfaceModel(l.LightningModule):
                 batch.quote_iv[b],
                 batch.quote_valid[b],
             )
-            exp.add_image("vis/iv_surface", tensor, step)
+            _log_image("vis/iv_surface", tensor)
         except Exception as e:
             warnings.warn(f"vis/iv_surface failed: {e}")
 
@@ -218,13 +227,13 @@ class LitSurfaceModel(l.LightningModule):
                 batch.quote_valid[b],
                 self.spec,
             )
-            exp.add_image("vis/residuals", tensor, step)
+            _log_image("vis/residuals", tensor)
         except Exception as e:
             warnings.warn(f"vis/residuals failed: {e}")
 
         try:
             attn = extract_encoder_attention(batch.img[[b]], self.model.img_enc)
             tensor = plot_encoder_attention(attn[0], self.spec, self.hparams.patch)
-            exp.add_image("vis/encoder_attention", tensor, step)
+            _log_image("vis/encoder_attention", tensor)
         except Exception as e:
             warnings.warn(f"vis/encoder_attention failed: {e}")

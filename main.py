@@ -119,6 +119,7 @@ def main() -> None:
         callbacks=[lrmon, ckpt],
         gradient_clip_val=1.0,
         enable_progress_bar=True,
+
     )
 
     trainer.fit(lit, dm)
