@@ -97,6 +97,9 @@ class SurfaceDataModule(l.LightningDataModule):
         self.quote_num_mean: Optional[torch.Tensor] = None
         self.quote_num_std: Optional[torch.Tensor] = None
 
+        self.img_mean: Optional[torch.Tensor] = None
+        self.img_std: Optional[torch.Tensor] = None
+
         self.feat_ix = {
             "Impl_Vol": 0,
             "Bid": 1,
@@ -138,6 +141,53 @@ class SurfaceDataModule(l.LightningDataModule):
         std = torch.tensor([float(stds[f"s{i}"]) for i in range(9)], dtype=torch.float32)
         std = torch.clamp(std, min=1e-6)
         return mean, std
+
+    def _compute_img_stats(self, df_train: pl.DataFrame) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute per-channel mean/std for rasterized image normalisation.
+
+        Channel layout: [0] IV, [1] occupancy, [2] liquidity 1/(Ask-Bid),
+                        [3] |delta|, [4] gamma
+        Occupancy is binary → mean=0, std=1 (no normalisation).
+        Liquidity is clipped at the 99th percentile before computing stats.
+        """
+        eps = 1e-8
+        spread = (pl.col("Ask") - pl.col("Bid")).clip(lower_bound=eps)
+        liq = 1.0 / spread
+
+        liq_99 = df_train.select(liq.quantile(0.99).alias("p99")).to_dicts()[0]["p99"]
+        liq_clipped = liq.clip(upper_bound=liq_99)
+
+        feat_exprs = [
+            pl.col("Impl_Vol").alias("ch0"),
+            liq_clipped.alias("ch2"),
+            pl.col("delta").abs().alias("ch3"),
+            pl.col("gamma").alias("ch4"),
+        ]
+        tmp = df_train.select(feat_exprs)
+
+        keys = ["ch0", "ch2", "ch3", "ch4"]
+        means_row = tmp.select([pl.col(k).mean().alias(k) for k in keys]).to_dicts()[0]
+        stds_row = tmp.select([pl.col(k).std().fill_null(1.0).alias(k) for k in keys]).to_dicts()[0]
+
+        # Build [5] tensors; ch1 (occupancy) gets 0/1
+        mean_vals = [
+            float(means_row["ch0"]),  # ch0 IV
+            0.0,                       # ch1 occupancy – keep as is
+            float(means_row["ch2"]),  # ch2 liquidity
+            float(means_row["ch3"]),  # ch3 |delta|
+            float(means_row["ch4"]),  # ch4 gamma
+        ]
+        std_vals = [
+            float(stds_row["ch0"]),
+            1.0,
+            float(stds_row["ch2"]),
+            float(stds_row["ch3"]),
+            float(stds_row["ch4"]),
+        ]
+
+        img_mean = torch.tensor(mean_vals, dtype=torch.float32)
+        img_std = torch.clamp(torch.tensor(std_vals, dtype=torch.float32), min=1e-6)
+        return img_mean, img_std
 
     def _preprocess(self, df: pl.DataFrame) -> pl.DataFrame:
         df = df.with_columns(
@@ -255,6 +305,7 @@ class SurfaceDataModule(l.LightningDataModule):
 
         self.spec = self._compute_spec_from_train(df_train)
         self.quote_num_mean, self.quote_num_std = self._compute_quote_num_stats(df_train)
+        self.img_mean, self.img_std = self._compute_img_stats(df_train)
 
         self.train_ds = DayGroupedDataset(self._group_by_date(df_train))
         self.val_ds = DayGroupedDataset(self._group_by_date(df_val))
@@ -328,6 +379,14 @@ class SurfaceDataModule(l.LightningDataModule):
 
         feat = torch.stack([quote_iv, bid, ask, delta, gamma], dim=-1)
         img = rasterize_quotes(quote_u, quote_v, feat, quote_valid, self.spec, self.feat_ix)
+
+        # Normalise channels 0, 2, 3, 4; keep channel 1 (occupancy) binary
+        assert self.img_mean is not None and self.img_std is not None
+        img_mean = self.img_mean.view(1, 5, 1, 1)
+        img_std = self.img_std.view(1, 5, 1, 1)
+        img = img.clone()
+        idx = [0, 2, 3, 4]
+        img[:, idx, :, :] = (img[:, idx, :, :] - img_mean[:, idx]) / img_std[:, idx]
 
         batch = SurfaceBatch(
             img=img,

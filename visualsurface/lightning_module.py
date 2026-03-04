@@ -28,8 +28,8 @@ class LitSurfaceModel(l.LightningModule):
         lr: float = 2e-4,
         weight_decay: float = 1e-2,
         w_fit: float = 1.0,
-        w_smooth: float = 0.1,
-        w_arb: float = 0.1,
+        w_smooth: float = 0.01,
+        w_arb: float = 0.05,
         hidden_size: int = 256,
         mlp_size: int | None = None,
         d_model: int | None = None,
@@ -145,6 +145,9 @@ class LitSurfaceModel(l.LightningModule):
         self.log("train/fit", losses["fit"], prog_bar=True)
         self.log("train/smooth", losses["smooth"], prog_bar=True)
         self.log("train/arb", losses["arb"], prog_bar=True)
+        self.log("train/fit_raw", losses["fit"].detach())
+        self.log("train/smooth_raw", losses["smooth"].detach())
+        self.log("train/arb_raw", losses["arb"].detach())
         return losses["total"]
 
     def validation_step(self, batch: SurfaceBatch, batch_idx: int):
