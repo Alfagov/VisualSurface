@@ -173,29 +173,48 @@ def rasterize_quotes(
     flat_idx = (batch_ids[mask] * HW + (iv[mask] * Nu + iu[mask])).long()
 
     C = 5
-    out = torch.zeros(B, C, HW, device=device)
-    counts = torch.zeros(B, HW, device=device)
+    flat_out = torch.zeros(B * HW, C, device=device)  # (B*HW, C) — always contiguous
+    flat_counts = torch.zeros(B * HW, device=device)
 
-    ones = torch.ones_like(flat_idx, dtype=out.dtype, device=device)
-    counts.reshape(-1).scatter_add_(0, flat_idx, ones)
+    ones = torch.ones(flat_idx.shape[0], dtype=torch.float32, device=device)
+    flat_counts.scatter_add_(0, flat_idx, ones)
 
-    iv_obs = feat[..., feat_ix["Impl_Vol"]]
-    out[:, 0, :].reshape(-1).scatter_add_(0, flat_idx, iv_obs[mask])
+    def scatter(ch: int, vals: torch.Tensor):
+        flat_out[:, ch].scatter_add_(0, flat_idx, vals[mask])
 
+    scatter(0, feat[..., feat_ix["Impl_Vol"]])
     bid = feat[..., feat_ix["Bid"]]
     ask = feat[..., feat_ix["Ask"]]
-    spread = torch.clamp(ask - bid, min=eps)
-    liq = 1.0 / spread
-    out[:, 2, :].view(-1).scatter_add_(0, flat_idx, liq[mask])
+    scatter(2, 1.0 / torch.clamp(ask - bid, min=eps))
+    scatter(3, feat[..., feat_ix["delta"]].abs())
+    scatter(4, feat[..., feat_ix["gamma"]])
 
-    delta = feat[..., feat_ix["delta"]].abs()
-    out[:, 3, :].view(-1).scatter_add_(0, flat_idx, delta[mask])
+    denom = torch.clamp(flat_counts, min=1.0).unsqueeze(1)  # (B*HW, 1)
+    flat_out[:, [0, 2, 3, 4]] /= denom
+    flat_out[:, 1] = (flat_counts > 0).float()
 
-    gamma = feat[..., feat_ix["gamma"]]
-    out[:, 4, :].view(-1).scatter_add_(0, flat_idx, gamma[mask])
+    # ones = torch.ones_like(flat_idx, dtype=out.dtype, device=device)
+    # counts.reshape(-1).scatter_add_(0, flat_idx, ones)
+    #
+    # iv_obs = feat[..., feat_ix["Impl_Vol"]]
+    # out[:, 0, :].reshape(-1).scatter_add_(0, flat_idx, iv_obs[mask])
+    #
+    # bid = feat[..., feat_ix["Bid"]]
+    # ask = feat[..., feat_ix["Ask"]]
+    # spread = torch.clamp(ask - bid, min=eps)
+    # liq = 1.0 / spread
+    # out[:, 2, :].view(-1).scatter_add_(0, flat_idx, liq[mask])
+    #
+    # delta = feat[..., feat_ix["delta"]].abs()
+    # out[:, 3, :].view(-1).scatter_add_(0, flat_idx, delta[mask])
+    #
+    # gamma = feat[..., feat_ix["gamma"]]
+    # out[:, 4, :].view(-1).scatter_add_(0, flat_idx, gamma[mask])
+    #
+    # denom = torch.clamp(counts, min=1.0)
+    # out[:, [0,2,3,4], :] /= denom
+    #
+    # out[:, 1, :] = (counts > 0).float()
+    #return out.view(B, C, Nv, Nu)
 
-    denom = torch.clamp(counts, min=1.0)
-    out[:, [0,2,3,4], :] /= denom
-
-    out[:, 1, :] = (counts > 0).float()
-    return out.view(B, C, Nv, Nu)
+    return flat_out.view(B, HW, C).permute(0, 2, 1).view(B, C, Nv, Nu)
