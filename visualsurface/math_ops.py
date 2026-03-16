@@ -179,25 +179,20 @@ def rasterize_quotes(
     ones = torch.ones_like(flat_idx, dtype=out.dtype, device=device)
     counts.reshape(-1).scatter_add_(0, flat_idx, ones)
 
-    def _scatter(values: torch.Tensor) -> torch.Tensor:
-        buf = torch.zeros(B * HW, device=device)
-        buf.scatter_add_(0, flat_idx, values)
-        return buf.view(B, HW)
-
     iv_obs = feat[..., feat_ix["Impl_Vol"]]
-    out[:, 0, :] = _scatter(iv_obs[mask])
+    out[:, 0, :].reshape(-1).scatter_add_(0, flat_idx, iv_obs[mask])
 
     bid = feat[..., feat_ix["Bid"]]
     ask = feat[..., feat_ix["Ask"]]
     spread = torch.clamp(ask - bid, min=eps)
     liq = 1.0 / spread
-    out[:, 2, :] = _scatter(liq[mask])
+    out[:, 2, :].view(-1).scatter_add_(0, flat_idx, liq[mask])
 
     delta = feat[..., feat_ix["delta"]].abs()
-    out[:, 3, :] = _scatter(delta[mask])
+    out[:, 3, :].view(-1).scatter_add_(0, flat_idx, delta[mask])
 
     gamma = feat[..., feat_ix["gamma"]]
-    out[:, 4, :] = _scatter(gamma[mask])
+    out[:, 4, :].view(-1).scatter_add_(0, flat_idx, gamma[mask])
 
     denom = torch.clamp(counts, min=1.0).unsqueeze(1)
     for ch in [0, 2, 3, 4]:
