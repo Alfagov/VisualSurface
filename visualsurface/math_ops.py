@@ -139,12 +139,14 @@ def build_term_structure_by_t_days(
 
 
 def smoothness_loss_total_variance(iv_grid: torch.Tensor, T_vec: torch.Tensor, p: int = 2) -> torch.Tensor:
-    _, Nv, _ = iv_grid.shape
-    T = T_vec.view(1, Nv, 1).to(iv_grid.device)
-    w = (iv_grid ** 2) * torch.clamp(T, min=1e-8)
-
-    d2u = w[:, :, 2:] - 2 * w[:, :, 1:-1] + w[:, :, :-2]
-    d2v = w[:, 2:, :] - 2 * w[:, 1:-1, :] + w[:, :-2, :]
+    # Penalise curvature (second differences) of IV directly.
+    # The old formulation operated on w = iv²·T whose gradient ∝ iv·T,
+    # which vanishes near iv ≈ 0 and creates a sticky degenerate attractor.
+    # Second differences of iv itself have gradient ∝ fourth-order finite
+    # difference of iv — non-zero whenever the surface is non-flat,
+    # independent of the IV level.
+    d2u = iv_grid[:, :, 2:] - 2 * iv_grid[:, :, 1:-1] + iv_grid[:, :, :-2]
+    d2v = iv_grid[:, 2:, :] - 2 * iv_grid[:, 1:-1, :] + iv_grid[:, :-2, :]
 
     if p == 1:
         return d2u.abs().mean() + d2v.abs().mean()

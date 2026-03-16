@@ -115,11 +115,11 @@ def main() -> None:
         save_last=True,
     )
     trainer = l.Trainer(
+        accelerator="cpu",
         max_epochs=150,
         callbacks=[lrmon, ckpt],
         gradient_clip_val=1.0,
         enable_progress_bar=True,
-
     )
 
     trainer.fit(lit, dm)

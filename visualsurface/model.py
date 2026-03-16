@@ -128,6 +128,9 @@ class SurfaceReconstructor(nn.Module):
             nn.GELU(),
             nn.Linear(mlp_size, 1),
         )
+        # Initialise bias so the model starts predicting IV ≈ 0.20:
+        # sigmoid(-1.23) * 0.84 + 0.01 ≈ 0.20
+        nn.init.constant_(self.head[-1].bias, -1.23)
 
     def forward(
         self,
@@ -166,5 +169,7 @@ class SurfaceReconstructor(nn.Module):
         tgt = self.query_mlp(uv)
         h = self.decoder(tgt=tgt, memory=mem, memory_key_padding_mask=mem_kpm)
         iv = self.head(h).squeeze(-1)
-        iv = F.softplus(iv) + 1e-6
+        # sigmoid bounded to (0.01, 0.85) — matches the data filter and never
+        # saturates, so gradients are always non-zero regardless of iv magnitude.
+        iv = torch.sigmoid(iv) * 0.84 + 0.01
         return iv.view(B, self.spec.Nv, self.spec.Nu)
