@@ -194,9 +194,8 @@ def rasterize_quotes(
     gamma = feat[..., feat_ix["gamma"]]
     out[:, 4, :].view(-1).scatter_add_(0, flat_idx, gamma[mask])
 
-    denom = torch.clamp(counts, min=1.0).unsqueeze(1)
-    for ch in [0, 2, 3, 4]:
-        out[:, ch, :] = out[:, ch, :] / denom[:, 0, :]
+    denom = torch.clamp(counts, min=1.0)
+    out[:, [0,2,3,4], :] /= denom
 
     out[:, 1, :] = (counts > 0).float()
     return out.view(B, C, Nv, Nu)
