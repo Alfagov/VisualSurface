@@ -272,6 +272,8 @@ class SurfaceDataModule(l.LightningDataModule):
         df = df.with_columns((pl.col("K") / pl.col("Fwd")).log().alias("u"))
         df = df.with_columns(pl.col("T_years").log().alias("v"))
 
+        df = df.filter(pl.col("u").is_not_null() & pl.col("v").is_not_null())
+
         df = df.with_columns(
             pl.when(pl.col("cp_flag") == "C").then(0).otherwise(1).cast(pl.Int64).alias("cp_i"),
             pl.when(pl.col("exercise_style") == "E").then(0).otherwise(1).cast(pl.Int64).alias("style_i"),
