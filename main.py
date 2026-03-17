@@ -92,6 +92,8 @@ def main() -> None:
     dm = SurfaceDataModule(
         data_path="./data/108105/2025_C_options_data.csv",
         num_workers=0,
+        kfwd_min=0.15,
+        kfwd_max=1.50,
     )
     dm.setup("fit")
 

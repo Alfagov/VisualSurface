@@ -24,6 +24,7 @@ def make_quote_numeric_features(
     r: torch.Tensor,
     q: torch.Tensor,
     vix: torch.Tensor,
+    iv: torch.Tensor,
 ) -> torch.Tensor:
     eps = 1e-12
     mid = 0.5 * (bid + ask)
@@ -35,6 +36,7 @@ def make_quote_numeric_features(
 
     return torch.stack(
         [
+            iv,              # direct IV observation — the primary training signal
             mid / spot,
             spread / spot,
             price / spot,
@@ -75,6 +77,8 @@ class SurfaceDataModule(l.LightningDataModule):
         seed: int = 42,
         u_quantile_clip: Tuple[float, float] = (0.001, 0.999),
         v_quantile_clip: Tuple[float, float] = (0.001, 0.999),
+        kfwd_min: Optional[float] = None,   # override lower K/Fwd bound (e.g. 0.15)
+        kfwd_max: Optional[float] = None,   # override upper K/Fwd bound (e.g. 1.50)
     ):
         super().__init__()
         self.data_path = data_path
@@ -89,6 +93,8 @@ class SurfaceDataModule(l.LightningDataModule):
         self.seed = seed
         self.u_quantile_clip = u_quantile_clip
         self.v_quantile_clip = v_quantile_clip
+        self.kfwd_min = kfwd_min
+        self.kfwd_max = kfwd_max
 
         self.spec: Optional[RasterSpec] = None
         self.train_ds: Optional[DayGroupedDataset] = None
@@ -99,6 +105,9 @@ class SurfaceDataModule(l.LightningDataModule):
 
         self.img_mean: Optional[torch.Tensor] = None
         self.img_std: Optional[torch.Tensor] = None
+
+        self.global_feats_mean: Optional[torch.Tensor] = None
+        self.global_feats_std: Optional[torch.Tensor] = None
 
         self.feat_ix = {
             "Impl_Vol": 0,
@@ -121,24 +130,26 @@ class SurfaceDataModule(l.LightningDataModule):
         expr_gamma_scaled = pl.col("gamma") * (expr_spot ** 2)
         expr_logK_over_S = (pl.col("K") / expr_spot).log()
 
+        # f0 = Impl_Vol (direct IV — must be first, matching make_quote_numeric_features)
         feat_exprs = [
-            (expr_mid / expr_spot).alias("f0"),
-            (expr_spread / expr_spot).alias("f1"),
-            (pl.col("Price") / expr_spot).alias("f2"),
-            pl.col("delta").alias("f3"),
-            expr_gamma_scaled.alias("f4"),
-            pl.col("rate").alias("f5"),
-            pl.col("dividend_yield").alias("f6"),
-            expr_logK_over_S.alias("f7"),
-            pl.col("vix").alias("f8"),
+            pl.col("Impl_Vol").alias("f0"),
+            (expr_mid / expr_spot).alias("f1"),
+            (expr_spread / expr_spot).alias("f2"),
+            (pl.col("Price") / expr_spot).alias("f3"),
+            pl.col("delta").alias("f4"),
+            expr_gamma_scaled.alias("f5"),
+            pl.col("rate").alias("f6"),
+            pl.col("dividend_yield").alias("f7"),
+            expr_logK_over_S.alias("f8"),
+            pl.col("vix").alias("f9"),
         ]
 
         tmp = df_train.select(feat_exprs)
-        means = tmp.select([pl.col(f"f{i}").mean().alias(f"m{i}") for i in range(9)]).to_dicts()[0]
-        stds = tmp.select([pl.col(f"f{i}").std().fill_null(1.0).alias(f"s{i}") for i in range(9)]).to_dicts()[0]
+        means = tmp.select([pl.col(f"f{i}").mean().alias(f"m{i}") for i in range(10)]).to_dicts()[0]
+        stds = tmp.select([pl.col(f"f{i}").std().fill_null(1.0).alias(f"s{i}") for i in range(10)]).to_dicts()[0]
 
-        mean = torch.tensor([float(means[f"m{i}"]) for i in range(9)], dtype=torch.float32)
-        std = torch.tensor([float(stds[f"s{i}"]) for i in range(9)], dtype=torch.float32)
+        mean = torch.tensor([float(means[f"m{i}"]) for i in range(10)], dtype=torch.float32)
+        std = torch.tensor([float(stds[f"s{i}"]) for i in range(10)], dtype=torch.float32)
         std = torch.clamp(std, min=1e-6)
         return mean, std
 
@@ -188,6 +199,39 @@ class SurfaceDataModule(l.LightningDataModule):
         img_mean = torch.tensor(mean_vals, dtype=torch.float32)
         img_std = torch.clamp(torch.tensor(std_vals, dtype=torch.float32), min=1e-6)
         return img_mean, img_std
+
+    def _compute_global_feats_stats(self, df_train: pl.DataFrame) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute per-feature mean/std for global_feats normalization.
+
+        global_feats = [log(spot), vix, r_med, q_med].
+        log(spot) for SPX is ~8.5 — an order of magnitude larger than the
+        other features — which distorts the first layer of global_mlp unless
+        normalised.
+        """
+        eps = 1e-12
+        grouped = (
+            df_train.group_by("date")
+            .agg(
+                pl.col("S").first().alias("S"),
+                pl.col("vix").first().alias("vix"),
+                pl.col("rate").median().alias("r_med"),
+                pl.col("dividend_yield").median().alias("q_med"),
+            )
+        )
+        log_spot = grouped.select((pl.col("S").clip(lower_bound=eps).log()).alias("ls"))
+        vix_col  = grouped.select(pl.col("vix"))
+        r_col    = grouped.select(pl.col("r_med"))
+        q_col    = grouped.select(pl.col("q_med"))
+
+        means, stds = [], []
+        for col in [log_spot["ls"], vix_col["vix"], r_col["r_med"], q_col["q_med"]]:
+            means.append(float(col.mean()))
+            stds.append(max(float(col.std()), 1e-6))
+
+        return (
+            torch.tensor(means, dtype=torch.float32),
+            torch.tensor(stds,  dtype=torch.float32),
+        )
 
     def _preprocess(self, df: pl.DataFrame) -> pl.DataFrame:
         df = df.with_columns(
@@ -246,8 +290,9 @@ class SurfaceDataModule(l.LightningDataModule):
             pl.col("v").quantile(vq1).alias("v_hi"),
         ).to_dicts()[0]
 
-        u_min = min(float(stats["u_lo"]) - 0.3, 0.0)
-        u_max = float(stats["u_hi"]) + 0.3
+        import math
+        u_min = math.log(self.kfwd_min) if self.kfwd_min is not None else min(float(stats["u_lo"]) - 0.3, 0.0)
+        u_max = math.log(self.kfwd_max) if self.kfwd_max is not None else float(stats["u_hi"]) + 0.3
         v_min = float(stats["v_lo"]) - 0.20
         v_max = float(stats["v_hi"]) + 0.20
 
@@ -306,6 +351,7 @@ class SurfaceDataModule(l.LightningDataModule):
         self.spec = self._compute_spec_from_train(df_train)
         self.quote_num_mean, self.quote_num_std = self._compute_quote_num_stats(df_train)
         self.img_mean, self.img_std = self._compute_img_stats(df_train)
+        self.global_feats_mean, self.global_feats_std = self._compute_global_feats_stats(df_train)
 
         self.train_ds = DayGroupedDataset(self._group_by_date(df_train))
         self.val_ds = DayGroupedDataset(self._group_by_date(df_val))
@@ -353,7 +399,9 @@ class SurfaceDataModule(l.LightningDataModule):
         vix = torch.tensor([float(r["vix"]) for r in batch_rows], dtype=torch.float32)
         r_med = torch.tensor([float(r["r_med"]) for r in batch_rows], dtype=torch.float32)
         q_med = torch.tensor([float(r["q_med"]) for r in batch_rows], dtype=torch.float32)
-        global_feats = torch.stack([torch.log(torch.clamp(spot, min=1e-12)), vix, r_med, q_med], dim=-1)
+        global_feats_raw = torch.stack([torch.log(torch.clamp(spot, min=1e-12)), vix, r_med, q_med], dim=-1)
+        assert self.global_feats_mean is not None and self.global_feats_std is not None
+        global_feats = (global_feats_raw - self.global_feats_mean) / self.global_feats_std
 
         T_years = T_days / 365.0
         S_bn = spot.view(B, 1).expand(B, maxN)
@@ -371,6 +419,7 @@ class SurfaceDataModule(l.LightningDataModule):
             r=r_q,
             q=q_q,
             vix=vix_bn,
+            iv=quote_iv,
         )
 
         mean = self.quote_num_mean.view(1, 1, -1)

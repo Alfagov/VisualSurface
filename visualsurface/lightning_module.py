@@ -62,7 +62,7 @@ class LitSurfaceModel(l.LightningModule):
             patch=patch,
             vit_layers=vit_layers,
             vit_heads=vit_heads,
-            quote_num_dim=9,
+            quote_num_dim=10,
             global_dim=4,
             dec_layers=dec_layers,
             dec_heads=dec_heads,
